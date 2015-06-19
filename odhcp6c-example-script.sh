@@ -1,7 +1,10 @@
-#!/bin/sh
-# This script should be renamed to /usr/sbin/odhcp6c-update 
+#!/bin/sh -x
 [ -z "$2" ] && echo "Error: should be run by odhcpc6c" && exit 1
-PROTO=73 # distinguish between odhcpc6c generated info and others
+PROTO=73
+EXT_IFACE=eth1
+
+#env >> /tmp/odhcpdscript.log
+#echo "---" >> /tmp/odhcpdscript.log
 
 update_resolv() {
 	local device="$1"
@@ -82,7 +85,7 @@ setup_interface () {
 	done
 
 	ip -6 route flush dev "$device" proto $PROTO
-	#ip -6 address flush dev "$device" scope global
+	#ip -6 address flush dev "$device" scope global # just let it expire
 
 	# Merge addresses
 	for entry in $RA_ADDRESSES; do
@@ -101,12 +104,12 @@ setup_interface () {
 		local preferred="${entry%%,*}"
 		entry="${entry#*,}"
 		local valid="${entry%%,*}"
-
 		ip -6 address replace "$addr" dev "$device" preferred_lft "$preferred" valid_lft "$valid"
 	done
 
 	for entry in $RA_ROUTES; do
 		local addr="${entry%%,*}"
+		local mask=${addr#*/}
 		entry="${entry#*,}"
 		local gw="${entry%%,*}"
 		entry="${entry#*,}"
@@ -119,18 +122,30 @@ setup_interface () {
 		else
 			ip -6 route replace "$addr" metric "$metric" dev "$device" proto $PROTO
 		fi
+	
 
+		# Add a covering source specific route from the RA
+		local hadprefix=0
 		for prefix in $PREFIXES; do
 			local paddr="${prefix%%,*}"
 			[ -n "$gw" ] && ip -6 route replace "$addr" via "$gw" metric "$metric" dev "$device" from "$paddr" proto $PROTO
+			hadprefix=1
+		# Add a local network
+			local addr1="${paddr%%/*}"
+			ip -6 address replace "${addr1}1/64" dev "$EXT_IFACE" preferred_lft "$preferred" valid_lft "$valid"
 		done
+		if [ $hadprefix = 1 -a $mask  -lt 64 -a $mask -gt 0 -a -n "$gw" ] 
+		then
+			ip -6 route replace unreachable "$addr" proto $PROTO
+#			ip -6 route replace default via "$gw" metric "$metric" dev "$device" from "$addr" proto $PROTO
+		fi
 	done
 }
 
 teardown_interface() {
 	local device="$1"
 	ip -6 route flush dev "$device" proto $PROTO 
-	#don't flush all addresses because there are other sources of addresses
+	# ip -6 route flush proto $PROTO Will flush all the unreachable routes on exit
 	#ip -6 address flush dev "$device" scope global
 	update_resolv "$device" ""
 }
@@ -145,8 +160,12 @@ teardown_interface() {
 		informed|updated|rebound|ra-updated)
 			setup_interface "$1"
 		;;
-		stopped|unbound)
+		unbound)
 			teardown_interface "$1"
+		;;
+		stopped)
+			teardown_interface "$1"
+			ip -6 route flush proto $PROTO
 		;;
 		started)
 			teardown_interface "$1"
