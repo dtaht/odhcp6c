@@ -1,5 +1,7 @@
 #!/bin/sh
+# This script should be renamed to /usr/sbin/odhcp6c-update 
 [ -z "$2" ] && echo "Error: should be run by odhcpc6c" && exit 1
+PROTO=73 # distinguish between odhcpc6c generated info and others
 
 update_resolv() {
 	local device="$1"
@@ -76,11 +78,11 @@ setup_interface () {
 		fi
 
 		# TODO: delete this somehow when the prefix disappears
-		ip -6 route add unreachable "$addr"
+		ip -6 route replace unreachable "$addr" proto $PROTO
 	done
 
-	ip -6 route flush dev "$device"
-	ip -6 address flush dev "$device" scope global
+	ip -6 route flush dev "$device" proto $PROTO
+	#ip -6 address flush dev "$device" scope global
 
 	# Merge addresses
 	for entry in $RA_ADDRESSES; do
@@ -100,7 +102,7 @@ setup_interface () {
 		entry="${entry#*,}"
 		local valid="${entry%%,*}"
 
-		ip -6 address add "$addr" dev "$device" preferred_lft "$preferred" valid_lft "$valid" 
+		ip -6 address replace "$addr" dev "$device" preferred_lft "$preferred" valid_lft "$valid"
 	done
 
 	for entry in $RA_ROUTES; do
@@ -113,22 +115,23 @@ setup_interface () {
 		local metric="${entry%%,*}"
 
 		if [ -n "$gw" ]; then
-			ip -6 route add "$addr" via "$gw" metric "$metric" dev "$device" from "::/128"
+			ip -6 route replace "$addr" via "$gw" metric "$metric" dev "$device" from "::/128" proto $PROTO
 		else
-			ip -6 route add "$addr" metric "$metric" dev "$device"
+			ip -6 route replace "$addr" metric "$metric" dev "$device" proto $PROTO
 		fi
 
 		for prefix in $PREFIXES; do
 			local paddr="${prefix%%,*}"
-			[ -n "$gw" ] && ip -6 route add "$addr" via "$gw" metric "$metric" dev "$device" from "$paddr"
+			[ -n "$gw" ] && ip -6 route replace "$addr" via "$gw" metric "$metric" dev "$device" from "$paddr" proto $PROTO
 		done
 	done
 }
 
 teardown_interface() {
 	local device="$1"
-	ip -6 route flush dev "$device"
-	ip -6 address flush dev "$device" scope global
+	ip -6 route flush dev "$device" proto $PROTO 
+	#don't flush all addresses because there are other sources of addresses
+	#ip -6 address flush dev "$device" scope global
 	update_resolv "$device" ""
 }
 
